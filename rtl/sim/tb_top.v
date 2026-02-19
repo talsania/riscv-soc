@@ -1,154 +1,138 @@
 `timescale 1ns / 1ps
 
 //==============================================================================
-// Testbench for Simple SoC
-//==============================================================================
-// Tests the complete system:
-//   - CPU executes program from BRAM
-//   - Program writes to GPIO
-//   - Verify GPIO output changes
+// Testbench  -  Simple SoC  (CPU + GPIO + UART)
+//
+// What it checks:
+//   1. GPIO output changes to 0x00000001
+//   2. UART transmits 'H', 'i', '!'
+//   3. No CPU trap
 //==============================================================================
 
-module tb_top;
+module tb_top();
+    localparam CLK_PERIOD = 20;     // 50 MHz to 20 ns period
 
-    // Clock and Reset
-    reg clk;
-    reg resetn;
-    
-    // Outputs from SoC
+    reg  clk    = 1'b0;
+    reg  resetn = 1'b0;
+
     wire [31:0] gpio_out;
+    wire        uart_txd;
     wire [31:0] debug_pc;
     wire        debug_trap;
-    
-    // Instantiate the SoC
+
+    // DUT
     top soc (
-        .clk(clk),
-        .resetn(resetn),
-        .gpio_out(gpio_out),
-        .debug_pc(debug_pc),
+        .clk       (clk),
+        .resetn    (resetn),
+        .gpio_out  (gpio_out),
+        .uart_txd  (uart_txd),
+        .debug_pc  (debug_pc),
         .debug_trap(debug_trap)
     );
+
+    // Clk
+    always #(CLK_PERIOD/2) clk = ~clk;
     
-    // Clock generation (50MHz)
+    // UART RX monitor
+    // Waits for start-bit falling edge, samples 8 data bits, prints character
+    // Baud: 434 clocks * 20 ns = 8680 ns per bit
+    localparam BIT_NS = 434 * CLK_PERIOD;   // 8680 ns
+
+    reg [7:0] rx_byte;
+    integer   rx_bit;
+
     initial begin
-        clk = 0;
-        forever #10 clk = ~clk;
+        rx_byte = 8'h00;
+        rx_bit  = 0;
     end
-    
-    // Test sequence
+
+    always @(negedge uart_txd) begin            // start-bit falling edge
+        #(BIT_NS + BIT_NS/2);                   // skip start bit + land in middle of bit 0
+        rx_byte = 8'h00;
+        for (rx_bit = 0; rx_bit < 8; rx_bit = rx_bit + 1) begin
+            rx_byte[rx_bit] = uart_txd;         // sample (LSB first)
+            if (rx_bit < 7) #(BIT_NS);          // advance one bit period
+        end
+        $display("[%0t] UART RX: 0x%02h  ('%c')", $time, rx_byte,
+                 (rx_byte >= 32 && rx_byte < 127) ? rx_byte : 8'h2E);
+    end
+
+    // GPIO change monitor
+    reg [31:0] prev_gpio;
+    initial prev_gpio = 32'h0;
+
+    always @(gpio_out) begin
+        if (gpio_out !== prev_gpio) begin
+            $display("\n[%0t] *** GPIO changed:  0x%08h  ->  0x%08h ***\n",
+                     $time, prev_gpio, gpio_out);
+            prev_gpio = gpio_out;
+        end
+    end
+
+    // PC change monitor
+    reg [31:0] prev_pc;
+    initial prev_pc = 32'hFFFF_FFFF;
+
+    always @(posedge clk) begin
+        if (resetn && debug_pc !== prev_pc && debug_pc !== 32'h0) begin
+            $display("[%0t] PC = 0x%08h", $time, debug_pc);
+            prev_pc <= debug_pc;
+        end
+    end
+
+    // Trap monitor
+    always @(posedge debug_trap)
+        $display("\n!!! CPU TRAP detected at PC = 0x%08h !!!\n", debug_pc);
+
+    // Main test sequence
     initial begin
-        $display("========================================");
-        $display("Simple SoC Test - CPU + GPIO");
-        $display("========================================");
-        $display("");
-        $display("Program loaded in BRAM:");
-        $display("  1. Load GPIO base address (0x30000000)");
-        $display("  2. Write value 1 to GPIO");
-        $display("  3. Loop forever");
-        $display("");
-        
-        // Initialize
-        resetn = 0;
-        
-        // Hold reset
+        $display("==============================================");
+        $display("  Simple SoC Simulation");
+        $display("  Tests: GPIO write + UART TX 'Hi!'");
+        $display("==============================================\n");
+
+        // Hold reset for 100 ns
+        resetn = 1'b0;
         #100;
-        resetn = 1;
-        $display("[%0t] Reset released - CPU starting", $time);
-        $display("");
-        
-        // Run for enough time to execute the program
-        #5000;
-        
-        // Check results
-        $display("");
-        $display("========================================");
-        $display("Test Results:");
-        $display("========================================");
-        
-        if (gpio_out == 32'hAAA00000) begin
-            $display("✓ PASS: GPIO output = 0x%08h (expected 0xAAA00000)", gpio_out);
-            $display("");
-            $display("SUCCESS! CPU successfully wrote to GPIO peripheral!");
-        end else begin
-            $display("✗ FAIL: GPIO output = 0x%08h (expected 0xAAA00000)", gpio_out);
-            $display("");
-            $display("The CPU did not write the expected value to GPIO.");
-        end
-        
-        if (debug_trap) begin
-            $display("⚠ WARNING: CPU entered trap state");
-        end
-        
-        $display("========================================");
-        
+        resetn = 1'b1;
+        $display("[%0t] Reset released - CPU running\n", $time);
+
+        // Wait long enough for:
+        //   - GPIO write  (~300 ns)
+        //   - 3x UART bytes @ 10 bits x 8680 ns = ~260 000 ns
+        //   Total with margin = 600 000 ns
+        #600_000;
+
+        // Report results 
+        $display("\n==============================================");
+        $display("  Results");
+        $display("==============================================");
+
+        if (gpio_out == 32'h0000_0001)
+            $display("  PASS  GPIO : gpio_out = 0x%08h  (expected 0x00000001)", gpio_out);
+        else
+            $display("  FAIL  GPIO : gpio_out = 0x%08h  (expected 0x00000001)", gpio_out);
+
+        if (!debug_trap)
+            $display("  PASS  CPU  : no trap");
+        else
+            $display("  FAIL  CPU  : trap asserted - check waveform");
+
+        $display("  INFO  UART : check lines above for 'H', 'i', '!'");
+        $display("==============================================\n");
+
         #500;
         $finish;
-    end
-    
-    // Monitor PC changes
-    reg [31:0] last_pc;
-    always @(posedge clk) begin
-        if (resetn && debug_pc != 32'h0 && debug_pc != last_pc) begin
-            $display("[%0t] PC = 0x%08h", $time, debug_pc);
-            last_pc <= debug_pc;
-        end
-    end
-    
-    // Monitor GPIO changes
-    reg [31:0] last_gpio;
-    initial last_gpio = 32'h0;
-    
-    always @(gpio_out) begin
-        if (gpio_out != last_gpio) begin
-            $display("");
-            $display("****************************************");
-            $display("*** GPIO OUTPUT CHANGED!");
-            $display("*** Old value: 0x%08h", last_gpio);
-            $display("*** New value: 0x%08h", gpio_out);
-            $display("*** Binary:    %32b", gpio_out);
-            $display("****************************************");
-            $display("");
-            last_gpio = gpio_out;
-        end
-    end
-    
-    // Monitor for trap
-    always @(posedge debug_trap) begin
-        $display("");
-        $display("!!! CPU TRAP OCCURRED at PC = 0x%08h !!!", debug_pc);
-        $display("");
     end
 
 endmodule
 
 /* OUTPUT:-
-Program loaded in BRAM:
-  1. Load GPIO base address (0x30000000)
-  2. Write value 1 to GPIO
-  3. Loop forever
-
-[100000] Reset released - CPU starting
-
-[170000] DECODER: BRAM IFETCH from 0x00000000 = 0x300000b7
-[250000] DECODER: BRAM IFETCH from 0x00000004 = 0xaaa00113
-[330000] DECODER: BRAM IFETCH from 0x00000008 = 0x00208213
-[410000] DECODER: BRAM IFETCH from 0x0000000c = 0x0020a023
-[490000] DECODER: BRAM IFETCH from 0x00000010 = 0xffdff06f
-[530000] GPIO WRITE: 0xfffffaaa
-
-****************************************
-*** GPIO OUTPUT CHANGED!
-*** Old value: 0x00000000
-*** New value: 0xfffffaaa
-*** Binary:    11111111111111111111101010101010
-****************************************
-
-[550000] DECODER: GPIO WRITE to 0x30000000 = 0xfffffaaa
-[630000] DECODER: BRAM IFETCH from 0x0000000c = 0x0020a023
-[710000] DECODER: BRAM IFETCH from 0x00000010 = 0xffdff06f
-[750000] GPIO WRITE: 0xfffffaaa
-[770000] DECODER: GPIO WRITE to 0x30000000 = 0xfffffaaa
-[850000] DECODER: BRAM IFETCH from 0x0000000c = 0x0020a023
-[930000] DECODER: BRAM IFETCH from 0x00000010 = 0xffdff06f
-[970000] GPIO WRITE: 0xfffffaaa
-[990000] DECODER: GPIO WRITE to 0x30000000 = 0xfffffaaa */
+==============================================
+  Results
+==============================================
+  PASS  GPIO : gpio_out = 0x00000001  (expected 0x00000001)
+  PASS  CPU  : no trap
+  INFO  UART : check lines above for 'H', 'i', '!'
+==============================================
+*/

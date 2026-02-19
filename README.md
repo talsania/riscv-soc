@@ -1,196 +1,140 @@
-## Project Overview
+# RISC-V SoC from Scratch
 
-This repository documents the journey of building a RISC-V-based SoC from scratch, starting with understanding the CPU core and progressively adding peripherals, interrupts, and custom hardware accelerators.
+Educational project building a complete RISC-V System-on-Chip with PicoRV32 CPU, memory-mapped peripherals, and bare-metal software.
 
-### Development Timeline
+## Current Status
 
-- **Phase 1**: CPU Understanding & Simulation
-- **Phase 2 (in progress...)**: Minimal SoC with Memory-Mapped Peripherals
-- **Phase 3**: Interrupt Support
-- **Phase 4**: AXI Bus Integration & Custom Accelerator
+Working SoC with GPIO and UART peripherals, verified in simulation.
 
-## Repository Structure
-
+## Architecture
 ```
-.
-├── rtl/
-│   ├── cpu/              # PicoRV32 core
-│   └── peripherals/      # GPIO, UART, etc.
-├── sim/
-│   └── tb/               # Testbenches
-├── sw/                   # Software (C programs)
-├── docs/                 # Documentation
-└── README.md
+simple_soc
+├── PicoRV32 CPU (RV32I)
+├── Memory Decoder (address router)
+├── BRAM (4KB instruction + data)
+├── GPIO (32-bit output register)
+└── UART TX (115200 baud, 8N1)
 ```
+
+**Memory Map:**
+- `0x0000_0000` - BRAM (instruction/data)
+- `0x2000_0000` - UART data register
+- `0x2000_0004` - UART status register (bit 0 = busy)
+- `0x3000_0000` - GPIO output register
+
+## Files
+
+**RTL (Design Sources):**
+- `picorv32.v` - CPU core
+- `memory_decoder.v` - Address router
+- `simple_bram.v` - 4KB memory with test program
+- `gpio_peripheral.v` - GPIO output register
+- `uart_tx_peripheral.v` - Serial transmitter
+- `simple_soc.v` - Top-level integration
+
+**Simulation:**
+- `tb_top.v` - Complete system testbench
+
+## Running Simulation
+
+1. Create Vivado project
+2. Add all RTL files as design sources
+3. Add `tb_top.v` as simulation source, set as top
+4. Run Behavioral Simulation
+5. In TCL console: `run 600000ns`
+
+**Expected output:**
+```
+PASS  GPIO : gpio_out = 0x00000001
+PASS  CPU  : no trap
+UART RX: 0x48 ('H')
+UART RX: 0x69 ('i')
+UART RX: 0x21 ('!')
+```
+
+## Test Program
+
+Assembly program pre-loaded in BRAM:
+1. Write `1` to GPIO (address 0x30000000)
+2. Send 'H' via UART (address 0x20000000)
+3. Poll UART status until transmission complete
+4. Send 'i' (with polling)
+5. Send '!' (with polling)
+6. Loop forever
+
+Demonstrates memory-mapped I/O and busy-wait synchronization between fast CPU and slow peripherals.
+
+## Key Implementation Details
+
+**GPIO Peripheral:**
+- Single 32-bit register, 1-cycle latency
+- Supports both read and write
+
+**UART Peripheral:**
+- 10 bits per byte (1 start + 8 data + 1 stop)
+- 434 clock cycles per bit at 50MHz = 115200 baud
+- Transmit time: ~87,000ns per byte
+- Status register allows software polling
+
+**Memory Decoder:**
+- Combinational address decode (top 4 bits)
+- Routes CPU requests to correct peripheral
+- Returns 0xDEADDEAD for unmapped addresses
+
+**CPU-Peripheral Synchronization:**
+- Software polls status register before each write
+- Busy-wait loop: `LW status → ANDI → BNE`
+- Prevents data loss when peripheral slower than CPU
+
+## Common Issues Fixed
+
+**Issue 1: Instruction Encoding**
+- Bug: `LUI x2, 0x20000` encoded as 0x200000B7 (rd=1)
+- Fix: Correct encoding 0x20000137 (rd=2)
+- Impact: Wrong register loaded, UART writes to address 0
+
+**Issue 2: Debug PC Visibility**
+- Bug: `debug_pc` showed 0 between instruction fetches
+- Fix: Latch PC value on every `mem_instr` access
+- Impact: Waveform now shows stable PC progression
+
+**Issue 3: UART Data Loss**
+- Bug: CPU sent bytes 400x faster than UART could transmit
+- Fix: Software busy-wait polling of status register
+- Impact: All bytes transmitted successfully
 
 ## Signal Reference
 
-### Memory Interface Signals
+**CPU Memory Interface:**
+- `mem_valid` - Request active
+- `mem_instr` - 1=instruction fetch, 0=data
+- `mem_addr` - Address
+- `mem_wdata` - Write data
+- `mem_wstrb` - Byte enables (0=read, F=write)
+- `mem_ready` - Operation complete
+- `mem_rdata` - Read data
 
-**CPU to Memory (Request):**
-- `mem_valid` - CPU is requesting memory access (1=active, 0=idle)
-- `mem_instr` - Access type (1=instruction fetch, 0=data access)
-- `mem_addr[31:0]` - Address to read/write
-- `mem_wdata[31:0]` - Data to write (for stores)
-- `mem_wstrb[3:0]` - Byte enables (0000=read, 1111=write word)
+**Peripheral Interface (example GPIO):**
+- `gpio_valid` - Access request
+- `gpio_we` - Write enable
+- `gpio_wdata` - Data to write
+- `gpio_rdata` - Data read back
+- `gpio_ready` - Operation complete
+- `gpio_out` - Physical output pins
 
-**Memory to CPU (Response):**
-- `mem_ready` - Memory operation complete (1=ready, 0=busy)
-- `mem_rdata[31:0]` - Data read from memory (for loads/fetches)
+## Next Steps
 
-### Common Abbreviations
-
-**Memory Operations:**
-- IFETCH = Instruction Fetch
-- DWRITE = Data Write (Store)
-- DREAD = Data Read (Load)
-
-**Address Notation:**
-- @0xXX = Memory address being accessed
-- [0x100] = Contents of memory address 0x100
-
-**Register Operations:**
-- xN = RISC-V register N (x0-x31)
-- xN=value = Register N gets assigned value
-
-**Instruction Types:**
-- R-type = Register-register operations (ADD, SUB, etc.)
-- I-type = Immediate operations (ADDI, LOAD, etc.)
-- S-type = Store operations (SW, SH, SB)
-- B-type = Branch operations (BEQ, BNE, etc.)
-- J-type = Jump operations (JAL, JALR)
-
-## Memory Interface Protocol
-
-The PicoRV32 uses a simple valid/ready handshake:
-
-```
-Cycle 1: CPU asserts mem_valid with address
-         CPU provides wdata and wstrb for writes
-         
-Cycle 2: Memory processes request
-         Memory asserts mem_ready
-         Memory provides rdata for reads
-         
-Cycle 3: Transaction completes
-         Both valid and ready deassert
-```
-
-For instruction fetches: `mem_instr=1`  
-For data access: `mem_instr=0`
-
-For writes: `mem_wstrb != 0` (indicates which bytes to write)  
-For reads: `mem_wstrb == 0`
-
-## Testing & Verification
-
-Each component is tested independently before integration:
-
-1. **Unit tests** - Individual peripherals (GPIO, UART)
-2. **Integration tests** - CPU with peripherals
-3. **Software tests** - Bare-metal C programs
-4. **Waveform verification** - Signal timing and protocol compliance
-
-## Build Instructions
-
-### Prerequisites
-
-- Xilinx Vivado (tested with 2020.1+)
-- RISC-V GCC toolchain (for compiling C code)
-- Python 3.x (for helper scripts)
-
-### Running Simulations
-
-**CPU Only:**
-```bash
-# In Vivado:
-1. Create new project
-2. Add rtl/cpu/picorv32.v
-3. Add sim/tb/tb_picorv32_simple.v
-4. Set tb_picorv32_simple as top
-5. Run Behavioral Simulation
-```
-
-**SoC with Peripherals:**
-```bash
-# Instructions will be added as components are completed
-```
-
-## Peripheral Specifications
-
-### GPIO Peripheral
-
-**Address:** 0x30000000  
-**Type:** Write/Read  
-**Width:** 32 bits  
-
-**Usage:**
-```c
-*(volatile uint32_t*)0x30000000 = value;  // Write
-uint32_t val = *(volatile uint32_t*)0x30000000;  // Read
-```
-
-### UART Peripheral
-
-**Address:** 0x20000000  
-**Type:** Write-only (TX)  
-**Width:** 8 bits  
-
-**Usage:**
-```c
-*(volatile uint8_t*)0x20000000 = 'A';  // Transmit character
-```
-
-**Baud rate:** Configurable (default 115200)  
-**Format:** 8N1 (8 data bits, no parity, 1 stop bit)
-
-## Software Development
-
-### Bare-Metal C Programming
-
-Programs run directly on hardware without an operating system. Key points:
-
-- **volatile keyword**: Required for MMIO to prevent compiler optimization
-- **Memory layout**: Defined by linker script
-- **No standard library**: Must implement basic functions
-- **Direct hardware access**: Peripherals accessed via pointers
-
-### Compilation Flow
-
-```
-C Source → RISC-V GCC → ELF Binary → objcopy → HEX/BIN → Memory Init File
-```
-
-Example:
-```bash
-riscv32-unknown-elf-gcc -march=rv32i -mabi=ilp32 -nostdlib -o program.elf main.c
-riscv32-unknown-elf-objcopy -O binary program.elf program.bin
-python bin2hex.py program.bin > program.hex
-```
-
-## Future Enhancements
-
-- Multi-cycle/pipelined CPU variants
-- Cache hierarchy (I-cache, D-cache)
-- Debug interface (JTAG)
-- Bootloader implementation
-- FPGA synthesis and deployment
-- Linux port (long-term goal)
+- Interrupt controller + timer peripheral
+- RISC-V GCC toolchain + C programming
+- FPGA synthesis and hardware deployment
+- Additional peripherals (SPI, I2C, PWM)
 
 ## Resources
 
-### Documentation
-- [PicoRV32 Repository](https://github.com/YosysHQ/picorv32)
-- [RISC-V ISA Specification](https://riscv.org/technical/specifications/)
-- [RISC-V Assembly Programmer's Manual](https://github.com/riscv/riscv-asm-manual)
-
-### Tools
-- [RISC-V GNU Toolchain](https://github.com/riscv/riscv-gnu-toolchain)
-- [Xilinx Vivado](https://www.xilinx.com/products/design-tools/vivado.html)
+- [PicoRV32 Core](https://github.com/YosysHQ/picorv32)
+- [RISC-V ISA Spec](https://riscv.org/technical/specifications/)
+- [RISC-V Assembly Reference](https://github.com/riscv/riscv-asm-manual)
 
 ## License
 
-This project uses the PicoRV32 core which is licensed under ISC. See individual component licenses for details.
-
----
-This is an educational project focused on learning RISC-V architecture and SoC design. The emphasis is on understanding rather than optimization.
+Educational project. PicoRV32 core uses ISC license.

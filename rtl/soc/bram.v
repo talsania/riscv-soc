@@ -1,17 +1,30 @@
 `timescale 1ns / 1ps
 
 //==============================================================================
-// Simple BRAM Controller
-//==============================================================================
-// Combined instruction and data memory
-// Single-cycle access for simplicity
+// Simple BRAM  (4 KB, 1-cycle latency)
+//
+// Pre-loaded program:
+//   0x00  LUI  x1, 0x30000      x1 = 0x30000000  (GPIO base)
+//   0x04  ADDI x3, x0, 1        x3 = 1
+//   0x08  SW   x3, 0(x1)        GPIO = 1
+//   0x0C  LUI  x2, 0x20000      x2 = 0x20000000  (UART base)
+//   0x10  ADDI x3, x0, 'H'      x3 = 0x48
+//   0x14  SB   x3, 0(x2)        UART TX 'H'
+//   0x18  ADDI x3, x0, 'i'      x3 = 0x69
+//   0x1C  SB   x3, 0(x2)        UART TX 'i'
+//   0x20  ADDI x3, x0, '!'      x3 = 0x21
+//   0x24  SB   x3, 0(x2)        UART TX '!'
+//   0x28  JAL  x0, 0            loop forever
+//
+// BUG FIX: memory[3] was 0x200000B7 which decodes as LUI x1 (rd=1) NOT LUI x2
+//          because rd field bits[11:7] = 00001 = register 1.
+//          Correct LUI x2 needs rd=2 → bits[11:7] = 00010
+//          Fixed value: 0x20000137
 //==============================================================================
 
 module bram (
     input  wire        clk,
     input  wire        resetn,
-    
-    // Memory interface
     input  wire        bram_valid,
     input  wire [31:0] bram_addr,
     input  wire [31:0] bram_wdata,
@@ -19,14 +32,9 @@ module bram (
     output reg  [31:0] bram_rdata,
     output reg         bram_ready
 );
+    reg [31:0] memory [0:1023];             // 4 KB
+    wire [9:0] word_addr = bram_addr[11:2]; // byte addr -> word index
 
-    // Memory array: 4KB = 1024 words of 32 bits
-    reg [31:0] memory [0:1023];
-    
-    // Calculate word address (divide byte address by 4)
-    wire [9:0] word_addr;
-    assign word_addr = bram_addr[11:2];  // Address bits [11:2] give us 10 bits = 1024 words
-    
     // Memory access
     always @(posedge clk) begin
         if (!resetn) begin
@@ -34,56 +42,60 @@ module bram (
             bram_rdata <= 32'h0;
         end else begin
             bram_ready <= 1'b0;
-            
             if (bram_valid && !bram_ready) begin
                 if (bram_wstrb != 4'b0000) begin
-                    // WRITE
-                    if (bram_wstrb[0]) memory[word_addr][7:0]   <= bram_wdata[7:0];
-                    if (bram_wstrb[1]) memory[word_addr][15:8]  <= bram_wdata[15:8];
+                    if (bram_wstrb[0]) memory[word_addr][ 7: 0] <= bram_wdata[ 7: 0];
+                    if (bram_wstrb[1]) memory[word_addr][15: 8] <= bram_wdata[15: 8];
                     if (bram_wstrb[2]) memory[word_addr][23:16] <= bram_wdata[23:16];
                     if (bram_wstrb[3]) memory[word_addr][31:24] <= bram_wdata[31:24];
-                end else begin
-                    // READ
+                end else
                     bram_rdata <= memory[word_addr];
-                end
                 bram_ready <= 1'b1;
             end
         end
     end
-    
-    // test program
+
+    // Program pre-load
     integer i;
     initial begin
-        // NOPs
-        for (i = 0; i < 1024; i = i + 1) begin
-            memory[i] = 32'h00000013;  // NOP (ADDI x0, x0, 0)
-        end
-        
-        /* Load a simple test program
-         This program will write to GPIO at 0x30000000
-         1. Load GPIO base address into x1: 0x30000000
-         2. Load test value into x2: 0xAAA00000
-         3. Write x2 to address in x1 (GPIO)
-         4. Loop forever */
-        
-//        memory[0] = 32'h300000B7;  // LUI x1, 0x30000      (x1 = 0x30000000 - GPIO base)
-//        memory[1] = 32'hAAA00137;  // LUI x2, 0xAAA00      (x2 = 0xAAA00000 - test pattern)
-//        memory[2] = 32'h0020A023;  // SW x2, 0(x1)         (MEM[x1 + 0] = x2, write to GPIO!)
-//        memory[3] = 32'hFFDFF06F;  // JAL x0, -4           (Loop forever at address 0x00)
-        
-        // Corrected test program, writes to GPIO at 0x30000000
-        memory[0] = 32'h300000B7;  // LUI x1, 0x30000      (x1 = 0x30000000 - GPIO base)
-        memory[1] = 32'hAAA00113;  // LUI x2, 0xAAA00      (x2 = 0xAAA00000)
-        memory[2] = 32'h00208213;  // ADDI x4, x1, 2       (x4 = 0x30000002)
-        memory[3] = 32'h0020A023;  // SW x2, 0(x1)         (MEM[0x30000000] = 0xAAA00000)
-        memory[4] = 32'hFFDFF06F;  // JAL x0, -4           (Loop forever)
-        
-        $display("BRAM: Initialized with test program");
-        $display("  0x00: LUI x1, 0x30000    -> x1 = 0x30000000 (GPIO address)");
-        $display("  0x04: LUI x2, 0xAAA00    -> x2 = 0xAAA00000 (test value)");
-        $display("  0x08: SW x2, 0(x1)       -> Write 0xAAA00000 to GPIO");
-        $display("  0x0C: JAL x0, -4         -> Loop");
-        $display("  Expected: GPIO output should change to 0xAAA00000");
+        for (i = 0; i < 1024; i = i + 1)
+            memory[i] = 32'h00000013;   // NOP
+
+        // GPIO
+        memory[0]  = 32'h300000B7;  // LUI  x1, 0x30000   -> x1 = 0x30000000 (GPIO)
+        memory[1]  = 32'h00100193;  // ADDI x3, x0, 1     -> x3 = 1
+        memory[2]  = 32'h0030A023;  // SW   x3, 0(x1)     -> MEM[0x30000000] = 1
+
+        // UART 
+        // FIX: original was 0x200000B7 which is LUI x1 (rd bits = 00001 = 1)
+        // Correct LUI x2 encoding: rd = 2 = 00010, so bit[8]=1 not bit[7]=1
+        // 0x20000137 has bits[11:7] = 00010 = rd 2 = x2
+        memory[3]  = 32'h20000137;  // LUI  x2, 0x20000   -> x2 = 0x20000000 (UART)
+
+        memory[4]  = 32'h04800193;  // ADDI x3, x0, 72    -> x3 = 'H' (0x48)
+        memory[5]  = 32'h00310023;  // SB   x3, 0(x2)     -> UART TX 'H'
+
+        memory[6]  = 32'h06900193;  // ADDI x3, x0, 105   -> x3 = 'i' (0x69)
+        memory[7]  = 32'h00310023;  // SB   x3, 0(x2)     -> UART TX 'i'
+
+        memory[8]  = 32'h02100193;  // ADDI x3, x0, 33    -> x3 = '!' (0x21)
+        memory[9]  = 32'h00310023;  // SB   x3, 0(x2)     -> UART TX '!'
+
+        // Loop 
+        memory[10] = 32'h0000006F;  // JAL  x0, 0         -> loop forever
+
+        $display("BRAM loaded. Program summary:");
+        $display("  0x00: LUI  x1, 0x30000  -> x1=0x30000000 (GPIO base)");
+        $display("  0x04: ADDI x3, x0, 1    -> x3=1");
+        $display("  0x08: SW   x3, 0(x1)    -> Write 1 to GPIO");
+        $display("  0x0C: LUI  x2, 0x20000  -> x2=0x20000000 (UART base) [FIXED]");
+        $display("  0x10: ADDI x3, x0, 'H'  -> x3=0x48");
+        $display("  0x14: SB   x3, 0(x2)    -> UART TX 'H'");
+        $display("  0x18: ADDI x3, x0, 'i'  -> x3=0x69");
+        $display("  0x1C: SB   x3, 0(x2)    -> UART TX 'i'");
+        $display("  0x20: ADDI x3, x0, '!'  -> x3=0x21");
+        $display("  0x24: SB   x3, 0(x2)    -> UART TX '!'");
+        $display("  0x28: JAL  x0, 0        -> loop");
     end
 
 endmodule
