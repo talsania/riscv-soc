@@ -39,7 +39,8 @@ module decoder (
     output reg         uart_valid,
     output reg         uart_we,
     output reg  [7:0]  uart_wdata,
-    input  wire        uart_ready
+    input  wire        uart_ready,
+    input  wire [31:0] uart_rdata
 );
 
     // Address decode using top nibble
@@ -71,7 +72,8 @@ module decoder (
         mem_ready = 1'b0;
         if      (sel_bram) begin mem_rdata = bram_rdata; mem_ready = bram_ready; end
         else if (sel_gpio) begin mem_rdata = gpio_rdata; mem_ready = gpio_ready; end
-        else if (sel_uart) begin mem_rdata = 32'h0;      mem_ready = uart_ready; end
+        // else if (sel_uart) begin mem_rdata = 32'h0;      mem_ready = uart_ready; end
+        else if (sel_uart) begin mem_rdata = uart_rdata;  mem_ready = uart_ready; end
         else               begin mem_rdata = 32'hDEADDEAD; mem_ready = mem_valid; end
     end
 

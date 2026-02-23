@@ -1,50 +1,42 @@
 `timescale 1ns / 1ps
 
 //==============================================================================
-// Simple SoC  -  PicoRV32 + BRAM + GPIO + UART
+// top.v  -  Simple SoC  (PicoRV32 + BRAM + GPIO + UART)
 //
-// Hierarchy:
-//   top (simple_soc)
-//   ├── picorv32          (CPU)
-//   ├── decoder    (address router)
-//   ├── bram       (4KB instruction + data memory)
-//   ├── gpio   (32-bit output register at 0x30000000)
-//   └── uart_tx(TX-only UART at 0x20000000)
+// Fix: removed duplicate .uart_rdata port connection on uart_inst
 //==============================================================================
 
 module top (
     input  wire        clk,
     input  wire        resetn,
-    output wire [31:0] gpio_out,   // GPIO output pins
-    output wire        uart_txd,   // UART TX serial pin
-    output wire [31:0] debug_pc,   // current PC (latched)
-    output wire        debug_trap  // CPU trap indicator
+    output wire [31:0] gpio_out,
+    output wire        uart_txd,
+    output wire [31:0] debug_pc,
+    output wire        debug_trap
 );
 
-    // CPU <-> Decoder wires
+    // CPU <-> Decoder
     wire        mem_valid, mem_instr, mem_ready;
     wire [31:0] mem_addr, mem_wdata, mem_rdata;
     wire [3:0]  mem_wstrb;
 
-    // Decoder <-> BRAM wires 
+    // Decoder <-> BRAM
     wire        bram_valid, bram_ready;
     wire [31:0] bram_rdata;
 
-    // Decoder <-> GPIO wires 
+    // Decoder <-> GPIO
     wire        gpio_valid, gpio_we, gpio_ready;
     wire [31:0] gpio_wdata, gpio_rdata;
 
-    // Decoder <-> UART wires 
+    // Decoder <-> UART
     wire        uart_valid, uart_we, uart_ready;
     wire [7:0]  uart_wdata;
     wire [31:0] uart_rdata;
 
-    // Debug signals 
     wire trap;
     assign debug_trap = trap;
 
-    // Latch PC on every instruction fetch so waveform shows stable value
-    // between fetches (otherwise it shows 0 during data accesses)
+    // Latch PC on instruction fetch for stable waveform display
     reg [31:0] pc_latch;
     always @(posedge clk) begin
         if (!resetn)
@@ -78,7 +70,6 @@ module top (
         .clk      (clk),
         .resetn   (resetn),
         .trap     (trap),
-        // Memory interface
         .mem_valid(mem_valid),
         .mem_instr(mem_instr),
         .mem_ready(mem_ready),
@@ -86,7 +77,6 @@ module top (
         .mem_wdata(mem_wdata),
         .mem_wstrb(mem_wstrb),
         .mem_rdata(mem_rdata),
-        // Unused ports - tie off cleanly
         .mem_la_read  (),
         .mem_la_write (),
         .mem_la_addr  (),
@@ -110,7 +100,6 @@ module top (
     decoder decoder (
         .clk       (clk),
         .resetn    (resetn),
-        // CPU side
         .mem_valid (mem_valid),
         .mem_instr (mem_instr),
         .mem_addr  (mem_addr),
@@ -118,21 +107,19 @@ module top (
         .mem_wstrb (mem_wstrb),
         .mem_rdata (mem_rdata),
         .mem_ready (mem_ready),
-        // BRAM
         .bram_valid(bram_valid),
         .bram_rdata(bram_rdata),
         .bram_ready(bram_ready),
-        // GPIO
         .gpio_valid(gpio_valid),
         .gpio_we   (gpio_we),
         .gpio_wdata(gpio_wdata),
         .gpio_rdata(gpio_rdata),
         .gpio_ready(gpio_ready),
-        // UART
         .uart_valid(uart_valid),
         .uart_we   (uart_we),
         .uart_wdata(uart_wdata),
-        .uart_ready(uart_ready)
+        .uart_ready(uart_ready),
+        .uart_rdata(uart_rdata)     // ← single connection, passes tx_busy back to CPU
     );
 
     // BRAM
@@ -159,9 +146,9 @@ module top (
         .gpio_out  (gpio_out)
     );
 
-    // UART TX
+    // UART TX  -  single .uart_rdata connection (bug fix: was listed twice)
     uart_tx #(
-        .BAUD_DIV(434)          // 50 MHz / 434 = 115200 baud
+        .BAUD_DIV(434)
     ) uart_inst (
         .clk       (clk),
         .resetn    (resetn),
@@ -169,9 +156,9 @@ module top (
         .uart_we   (uart_we),
         .uart_addr (mem_addr),
         .uart_wdata(uart_wdata),
-        .uart_rdata(uart_rdata),
+        .uart_rdata(uart_rdata),   
         .uart_ready(uart_ready),
         .uart_txd  (uart_txd)
     );
 
-endmodule
+endmodule 

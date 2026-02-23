@@ -1,140 +1,142 @@
-# RISC-V SoC from Scratch
+# RISC-V SoC
 
-Educational project building a complete RISC-V System-on-Chip with PicoRV32 CPU, memory-mapped peripherals, and bare-metal software.
+PicoRV32-based SoC with memory-mapped peripherals and bare-metal C firmware, verified in Vivado simulation.
 
-## Current Status
-
-Working SoC with GPIO and UART peripherals, verified in simulation.
+---
 
 ## Architecture
+
 ```
-simple_soc
-├── PicoRV32 CPU (RV32I)
-├── Memory Decoder (address router)
-├── BRAM (4KB instruction + data)
-├── GPIO (32-bit output register)
-└── UART TX (115200 baud, 8N1)
+top.v
+├── picorv32       RV32I CPU core
+├── decoder        Address router (combinational)
+├── bram           4KB instruction + data memory
+├── gpio           32-bit output register
+└── uart_tx        115200 baud 8N1 transmitter
 ```
 
 **Memory Map:**
-- `0x0000_0000` - BRAM (instruction/data)
-- `0x2000_0000` - UART data register
-- `0x2000_0004` - UART status register (bit 0 = busy)
-- `0x3000_0000` - GPIO output register
 
-## Files
+| Address       | Peripheral     | Access |
+|---------------|----------------|--------|
+| `0x0000_0000` | BRAM (4KB)     | R/W    |
+| `0x2000_0000` | UART TX data   | W      |
+| `0x2000_0004` | UART TX status | R      |
+| `0x3000_0000` | GPIO output    | R/W    |
 
-**RTL (Design Sources):**
-- `picorv32.v` - CPU core
-- `memory_decoder.v` - Address router
-- `simple_bram.v` - 4KB memory with test program
-- `gpio_peripheral.v` - GPIO output register
-- `uart_tx_peripheral.v` - Serial transmitter
-- `simple_soc.v` - Top-level integration
+UART status bit 0 = `tx_busy` (1 = transmitting, 0 = ready)
 
-**Simulation:**
-- `tb_top.v` - Complete system testbench
+---
 
-## Running Simulation
+## Repository Structure
 
-1. Create Vivado project
-2. Add all RTL files as design sources
-3. Add `tb_top.v` as simulation source, set as top
-4. Run Behavioral Simulation
-5. In TCL console: `run 600000ns`
-
-**Expected output:**
 ```
-PASS  GPIO : gpio_out = 0x00000001
+├── firmware/
+│   ├── start.S       Startup: zero registers, set stack, zero .bss, call main()
+│   ├── link.ld       Maps .text/.data/.bss into 4KB BRAM at 0x00000000
+│   ├── main.c        GPIO write + UART string output with tx_busy polling
+│   └── Makefile      ELF → BIN → hex (with byte-swap for $readmemh)
+└── rtl/soc/
+    ├── top.v         Top-level integration
+    ├── decoder.v     Combinational address decode on mem_addr[31:28]
+    ├── bram.v        4KB BRAM, initialised via $readmemh
+    ├── gpio.v        Single 32-bit register, 1-cycle latency
+    ├── uart_tx.v     8N1 TX, baud tick counter, MMIO handshake
+    └── cpu/picorv32.v
+    sim/tb_top.v      GPIO check + UART byte decoder testbench
+```
+
+---
+
+## Firmware Build
+
+```bash
+sudo apt install gcc-riscv64-unknown-elf xxd
+cd firmware/
+make        # → firmware.elf, firmware.bin, firmware.hex
+make clean
+```
+
+Compiler flags: `-march=rv32i -mabi=ilp32 -nostdlib -nostartfiles -ffreestanding -Os`
+
+Hex conversion byte-swaps for `$readmemh` word order:
+```bash
+objcopy --reverse-bytes=4 firmware.bin firmware.swap
+xxd -p -c4 firmware.swap > firmware.hex
+```
+
+No libgcc dependency — integer printing uses repeated subtraction instead of `%`/`/` to avoid `__udivsi3`/`__umodsi3` on rv32i.
+
+Current binary: **996 bytes** (24% of 4KB BRAM)
+
+---
+
+## Simulation
+
+Set `HEX_FILE` in `bram.v` to the absolute path of `firmware.hex`, then run behavioral simulation in Vivado.
+
+Expected output in TCL console:
+```
+DECODER -> GPIO WRITE  addr=0x30000000  data=0x00000001
+UART MMIO: wrote 0x50 ('P')
+UART TX sent: 0x50 ('P')
+UART RX: 'P'  (0x50)
+...
+PASS  GPIO : 0x00000001 seen within 500 us
 PASS  CPU  : no trap
-UART RX: 0x48 ('H')
-UART RX: 0x69 ('i')
-UART RX: 0x21 ('!')
 ```
 
-## Test Program
+Each UART byte takes ~87,000 ns at 115200 baud. Allow at least 30ms simulation time for a full string.
 
-Assembly program pre-loaded in BRAM:
-1. Write `1` to GPIO (address 0x30000000)
-2. Send 'H' via UART (address 0x20000000)
-3. Poll UART status until transmission complete
-4. Send 'i' (with polling)
-5. Send '!' (with polling)
-6. Loop forever
+---
 
-Demonstrates memory-mapped I/O and busy-wait synchronization between fast CPU and slow peripherals.
+## Implementation Notes
 
-## Key Implementation Details
+**Decoder** — combinational decode, zero latency. `uart_rdata` must be wired from `uart_tx` back through the decoder to `mem_rdata`; without it the `tx_busy` poll loop stalls permanently.
 
-**GPIO Peripheral:**
-- Single 32-bit register, 1-cycle latency
-- Supports both read and write
+**UART** — TX state machine and MMIO handshake share one `always @(posedge clk)` block. Splitting into two blocks causes both to drive `tx_state` on the same edge, locking `bit_idx` at 1 in DATA state.
 
-**UART Peripheral:**
-- 10 bits per byte (1 start + 8 data + 1 stop)
-- 434 clock cycles per bit at 50MHz = 115200 baud
-- Transmit time: ~87,000ns per byte
-- Status register allows software polling
+**BRAM** — `$readmemh` expects one word per line in big-endian byte order. Raw `xxd` output is little-endian; `objcopy --reverse-bytes=4` corrects this before conversion.
 
-**Memory Decoder:**
-- Combinational address decode (top 4 bits)
-- Routes CPU requests to correct peripheral
-- Returns 0xDEADDEAD for unmapped addresses
+**Stack** — initialised in `start.S` to `0x1000` (top of 4KB), grows downward.
 
-**CPU-Peripheral Synchronization:**
-- Software polls status register before each write
-- Busy-wait loop: `LW status → ANDI → BNE`
-- Prevents data loss when peripheral slower than CPU
-
-## Common Issues Fixed
-
-**Issue 1: Instruction Encoding**
-- Bug: `LUI x2, 0x20000` encoded as 0x200000B7 (rd=1)
-- Fix: Correct encoding 0x20000137 (rd=2)
-- Impact: Wrong register loaded, UART writes to address 0
-
-**Issue 2: Debug PC Visibility**
-- Bug: `debug_pc` showed 0 between instruction fetches
-- Fix: Latch PC value on every `mem_instr` access
-- Impact: Waveform now shows stable PC progression
-
-**Issue 3: UART Data Loss**
-- Bug: CPU sent bytes 400x faster than UART could transmit
-- Fix: Software busy-wait polling of status register
-- Impact: All bytes transmitted successfully
+---
 
 ## Signal Reference
 
-**CPU Memory Interface:**
-- `mem_valid` - Request active
-- `mem_instr` - 1=instruction fetch, 0=data
-- `mem_addr` - Address
-- `mem_wdata` - Write data
-- `mem_wstrb` - Byte enables (0=read, F=write)
-- `mem_ready` - Operation complete
-- `mem_rdata` - Read data
+**CPU memory interface:**
 
-**Peripheral Interface (example GPIO):**
-- `gpio_valid` - Access request
-- `gpio_we` - Write enable
-- `gpio_wdata` - Data to write
-- `gpio_rdata` - Data read back
-- `gpio_ready` - Operation complete
-- `gpio_out` - Physical output pins
+| Signal | Dir | Description |
+|--------|-----|-------------|
+| `mem_valid` | CPU→dec | Request active |
+| `mem_instr` | CPU→dec | 1=fetch, 0=data |
+| `mem_addr` | CPU→dec | Byte address |
+| `mem_wdata` | CPU→dec | Write data |
+| `mem_wstrb` | CPU→dec | Byte enables (0000=read) |
+| `mem_ready` | dec→CPU | Transaction complete (1-cycle pulse) |
+| `mem_rdata` | dec→CPU | Read data |
 
-## Next Steps
+---
 
-- Interrupt controller + timer peripheral
-- RISC-V GCC toolchain + C programming
-- FPGA synthesis and hardware deployment
-- Additional peripherals (SPI, I2C, PWM)
+## Notes
 
-## Resources
+**Implemented and verified in simulation:**
+- RV32I CPU executing compiled C firmware
+- BRAM loaded from compiled hex at simulation start
+- GPIO write verified via testbench
+- UART TX with `tx_busy` polling — zero dropped bytes
+- UART RX decoded in testbench at 115200 baud
 
-- [PicoRV32 Core](https://github.com/YosysHQ/picorv32)
+**Next:**
+- AXI-Lite bus replacing simple valid/ready interface
+- `picorv32_axi_adapter` bridge
+- AXI crossbar with BRAM, GPIO, UART as AXI-Lite slaves
+- HLS accelerator integration via AXI
+
+---
+
+## References
+
+- [PicoRV32](https://github.com/YosysHQ/picorv32)
 - [RISC-V ISA Spec](https://riscv.org/technical/specifications/)
-- [RISC-V Assembly Reference](https://github.com/riscv/riscv-asm-manual)
-
-## License
-
-Educational project. PicoRV32 core uses ISC license.
+- [RISC-V GNU Toolchain](https://github.com/riscv-collab/riscv-gnu-toolchain)
