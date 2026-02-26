@@ -93,7 +93,7 @@ module bram (
     // -------------------------------------------------------------------------
 
     // Path relative to Vivado project root (where .xpr lives).
-    localparam HEX_FILE = "C:/Users/Krishang/Desktop/riscv-stuff/firmware/firmware.hex";
+    localparam HEX_FILE = "C:/Users/Krishang/Desktop/riscv-soc/firmware/firmware.hex";
 
     integer i;
     initial begin
