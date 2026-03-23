@@ -1,22 +1,22 @@
 `timescale 1ns / 1ps
 
 //==============================================================================
-// top_axi.v  -  PicoRV32 SoC with AXI-Lite bus
-//
-// Uses picorv32_axi_adapter from picorv32.v (line 2727) directly.
-// picorv32_axi_adapter.v is NOT needed - delete it from the project.
-//
 // Hierarchy:
 //   top_axi
-//   ├── picorv32                 CPU (native valid/ready)
-//   ├── picorv32_axi_adapter     built-in adapter from picorv32.v
-//   ├── axi_crossbar             routes to 4 slaves by addr[31:28]
-//   ├── bram_axi_slave           Slave 0: BRAM  0x0000_0000
-//   ├── uart_axi_slave           Slave 1: UART  0x2000_0000
-//   ├── gpio_axi_slave           Slave 2: GPIO  0x3000_0000
-//   └── (Slave 3 tied off)       VPU placeholder 0x4000_0000
+//   |-- picorv32                 CPU (native valid/ready)
+//   |-- picorv32_axi_adapter     built-in adapter from picorv32.v
+//   |-- axi_crossbar             routes to 4 slaves by addr[31:28]
+//   |-- bram_axi_slave           Slave 0: BRAM  0x0000_0000
+//   |-- uart_axi_slave           Slave 1: UART  0x2000_0000
+//   |-- gpio_axi_slave           Slave 2: GPIO  0x3000_0000
+//   |-- dot_product              Slave 3: HLS dot product accelerator 0x4000_0000
 //
-// awprot / arprot from the adapter are ignored (not used in AXI-Lite slaves).
+// Slave 3 port mapping note:
+//   HLS generates uppercase CTRL prefix: s_axi_CTRL_AWADDR etc.
+//   Crossbar uses lowercase: s_axi_awaddr etc.
+//   All connections below map lowercase crossbar wires to uppercase HLS ports.
+//   ap_rst_n is active-low reset - connected directly to resetn.
+//   ACLK_EN inside dot_product_CTRL_s_axi is tied high internally.
 //==============================================================================
 
 module top_axi (
@@ -42,21 +42,18 @@ module top_axi (
     end
     assign debug_pc = pc_latch;
 
-    // AXI-Lite master bus (adapter → crossbar)
+    // AXI-Lite master bus (adapter to crossbar)
     wire        m_awvalid; wire        m_awready; wire [31:0] m_awaddr;
     wire        m_wvalid;  wire        m_wready;
     wire [31:0] m_wdata;   wire [3:0]  m_wstrb;
     wire        m_bvalid;  wire        m_bready;
-    wire [1:0]  m_bresp_nc;  // bresp - adapter doesn't check value
+    wire [1:0]  m_bresp_nc;
     wire        m_arvalid; wire        m_arready; wire [31:0] m_araddr;
     wire        m_rvalid;  wire        m_rready;
     wire [31:0] m_rdata;   wire [1:0]  m_rresp;
-    // awprot / arprot from adapter - unused, left open
-    wire [2:0]  m_awprot, m_arprot;
-    // bresp not driven by adapter - crossbar drives it back through bvalid
-    // (adapter only checks bvalid, not bresp value)
+    wire [2:0]  m_awprot,  m_arprot;
 
-    // Slave buses (crossbar → slaves)
+    // Slave buses (crossbar to slaves)
     // Slave 0: BRAM
     wire [31:0] s0_awaddr; wire s0_awvalid, s0_awready;
     wire [31:0] s0_wdata;  wire [3:0] s0_wstrb; wire s0_wvalid, s0_wready;
@@ -78,21 +75,12 @@ module top_axi (
     wire [31:0] s2_araddr; wire s2_arvalid, s2_arready;
     wire [31:0] s2_rdata;  wire [1:0] s2_rresp; wire s2_rvalid, s2_rready;
 
-    // Slave 3: VPU placeholder - tied off, returns OKAY immediately
+    // Slave 3: dot_product HLS accelerator
     wire [31:0] s3_awaddr; wire s3_awvalid, s3_awready;
     wire [31:0] s3_wdata;  wire [3:0] s3_wstrb; wire s3_wvalid, s3_wready;
     wire [1:0]  s3_bresp;  wire s3_bvalid, s3_bready;
     wire [31:0] s3_araddr; wire s3_arvalid, s3_arready;
     wire [31:0] s3_rdata;  wire [1:0] s3_rresp; wire s3_rvalid, s3_rready;
-
-    assign s3_awready = s3_awvalid;
-    assign s3_wready  = s3_wvalid;
-    assign s3_bresp   = 2'b00;
-    assign s3_bvalid  = s3_awvalid & s3_wvalid;
-    assign s3_arready = s3_arvalid;
-    assign s3_rdata   = 32'hDEADBEEF;
-    assign s3_rresp   = 2'b00;
-    assign s3_rvalid  = s3_arvalid;
 
     // PicoRV32 CPU
     picorv32 #(
@@ -117,12 +105,10 @@ module top_axi (
         .irq(32'h0), .eoi(), .trace_valid(), .trace_data()
     );
 
-    // Built-in PicoRV32 AXI adapter (from picorv32.v line 2727)
-    // Connects CPU native interface → AXI-Lite master signals
+    // AXI adapter
     picorv32_axi_adapter adapter (
         .clk            (clk),
         .resetn         (resetn),
-        // Native CPU side
         .mem_valid      (mem_valid),
         .mem_instr      (mem_instr),
         .mem_ready      (mem_ready),
@@ -130,11 +116,10 @@ module top_axi (
         .mem_wdata      (mem_wdata),
         .mem_wstrb      (mem_wstrb),
         .mem_rdata      (mem_rdata),
-        // AXI-Lite master side
         .mem_axi_awvalid(m_awvalid),
         .mem_axi_awready(m_awready),
         .mem_axi_awaddr (m_awaddr),
-        .mem_axi_awprot (m_awprot),   // unused by crossbar, left open
+        .mem_axi_awprot (m_awprot),
         .mem_axi_wvalid (m_wvalid),
         .mem_axi_wready (m_wready),
         .mem_axi_wdata  (m_wdata),
@@ -144,7 +129,7 @@ module top_axi (
         .mem_axi_arvalid(m_arvalid),
         .mem_axi_arready(m_arready),
         .mem_axi_araddr (m_araddr),
-        .mem_axi_arprot (m_arprot),   // unused by crossbar, left open
+        .mem_axi_arprot (m_arprot),
         .mem_axi_rvalid (m_rvalid),
         .mem_axi_rready (m_rready),
         .mem_axi_rdata  (m_rdata)
@@ -153,16 +138,14 @@ module top_axi (
     // AXI-Lite Crossbar
     axi_crossbar crossbar (
         .clk(clk), .resetn(resetn),
-        // Master (from adapter)
         .s_axi_awaddr(m_awaddr), .s_axi_awvalid(m_awvalid), .s_axi_awready(m_awready),
         .s_axi_wdata (m_wdata),  .s_axi_wstrb  (m_wstrb),
         .s_axi_wvalid(m_wvalid), .s_axi_wready (m_wready),
-        .s_axi_bresp (m_bresp_nc), // adapter doesn't use bresp value
+        .s_axi_bresp (m_bresp_nc),
         .s_axi_bvalid(m_bvalid), .s_axi_bready (m_bready),
         .s_axi_araddr(m_araddr), .s_axi_arvalid(m_arvalid), .s_axi_arready(m_arready),
         .s_axi_rdata (m_rdata),  .s_axi_rresp  (m_rresp),
         .s_axi_rvalid(m_rvalid), .s_axi_rready (m_rready),
-        // Slave 0: BRAM
         .m0_axi_awaddr(s0_awaddr),.m0_axi_awvalid(s0_awvalid),.m0_axi_awready(s0_awready),
         .m0_axi_wdata (s0_wdata), .m0_axi_wstrb (s0_wstrb),
         .m0_axi_wvalid(s0_wvalid),.m0_axi_wready(s0_wready),
@@ -170,7 +153,6 @@ module top_axi (
         .m0_axi_araddr(s0_araddr),.m0_axi_arvalid(s0_arvalid),.m0_axi_arready(s0_arready),
         .m0_axi_rdata (s0_rdata), .m0_axi_rresp (s0_rresp),
         .m0_axi_rvalid(s0_rvalid),.m0_axi_rready(s0_rready),
-        // Slave 1: UART
         .m1_axi_awaddr(s1_awaddr),.m1_axi_awvalid(s1_awvalid),.m1_axi_awready(s1_awready),
         .m1_axi_wdata (s1_wdata), .m1_axi_wstrb (s1_wstrb),
         .m1_axi_wvalid(s1_wvalid),.m1_axi_wready(s1_wready),
@@ -178,7 +160,6 @@ module top_axi (
         .m1_axi_araddr(s1_araddr),.m1_axi_arvalid(s1_arvalid),.m1_axi_arready(s1_arready),
         .m1_axi_rdata (s1_rdata), .m1_axi_rresp (s1_rresp),
         .m1_axi_rvalid(s1_rvalid),.m1_axi_rready(s1_rready),
-        // Slave 2: GPIO
         .m2_axi_awaddr(s2_awaddr),.m2_axi_awvalid(s2_awvalid),.m2_axi_awready(s2_awready),
         .m2_axi_wdata (s2_wdata), .m2_axi_wstrb (s2_wstrb),
         .m2_axi_wvalid(s2_wvalid),.m2_axi_wready(s2_wready),
@@ -186,7 +167,6 @@ module top_axi (
         .m2_axi_araddr(s2_araddr),.m2_axi_arvalid(s2_arvalid),.m2_axi_arready(s2_arready),
         .m2_axi_rdata (s2_rdata), .m2_axi_rresp (s2_rresp),
         .m2_axi_rvalid(s2_rvalid),.m2_axi_rready(s2_rready),
-        // Slave 3: VPU (tied off)
         .m3_axi_awaddr(s3_awaddr),.m3_axi_awvalid(s3_awvalid),.m3_axi_awready(s3_awready),
         .m3_axi_wdata (s3_wdata), .m3_axi_wstrb (s3_wstrb),
         .m3_axi_wvalid(s3_wvalid),.m3_axi_wready(s3_wready),
@@ -233,4 +213,31 @@ module top_axi (
         .s_axi_rvalid(s2_rvalid), .s_axi_rready (s2_rready),
         .gpio_out(gpio_out)
     );
+
+    // Slave 3: dot_product HLS accelerator
+    // HLS port names use uppercase CTRL prefix, crossbar uses lowercase
+    // ap_rst_n is active-low, tied directly to resetn
+    dot_product accel_inst (
+        .ap_clk              (clk),
+        .ap_rst_n            (resetn),
+        .s_axi_CTRL_AWVALID  (s3_awvalid),
+        .s_axi_CTRL_AWREADY  (s3_awready),
+        .s_axi_CTRL_AWADDR   (s3_awaddr[7:0]),
+        .s_axi_CTRL_WVALID   (s3_wvalid),
+        .s_axi_CTRL_WREADY   (s3_wready),
+        .s_axi_CTRL_WDATA    (s3_wdata),
+        .s_axi_CTRL_WSTRB    (s3_wstrb),
+        .s_axi_CTRL_ARVALID  (s3_arvalid),
+        .s_axi_CTRL_ARREADY  (s3_arready),
+        .s_axi_CTRL_ARADDR   (s3_araddr[7:0]),
+        .s_axi_CTRL_RVALID   (s3_rvalid),
+        .s_axi_CTRL_RREADY   (s3_rready),
+        .s_axi_CTRL_RDATA    (s3_rdata),
+        .s_axi_CTRL_RRESP    (s3_rresp),
+        .s_axi_CTRL_BVALID   (s3_bvalid),
+        .s_axi_CTRL_BREADY   (s3_bready),
+        .s_axi_CTRL_BRESP    (s3_bresp),
+        .interrupt           ()
+    );
+
 endmodule

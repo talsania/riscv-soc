@@ -1,11 +1,11 @@
 `timescale 1ns / 1ps
 
 //==============================================================================
-// tb_top.v  -  Testbench for top_axi (AXI-Lite bus SoC)
+// tb_top.v (top_axi testbench)
 //
-// Tests: GPIO write, UART TX, no CPU trap
+// Tests: GPIO write, UART TX, dot product accelerator, no CPU trap
 // UART:  115200 baud, 8N1 - BIT_NS = 434 * 20ns = 8680ns
-// Sim:   30ms total - covers full banner (~150 chars x ~87us each = ~13ms)
+// Sim:   30ms total
 //==============================================================================
 
 module tb_top();
@@ -20,7 +20,6 @@ module tb_top();
     wire [31:0] debug_pc;
     wire        debug_trap;
 
-    // DUT
     top_axi soc (
         .clk       (clk),
         .resetn    (resetn),
@@ -32,9 +31,7 @@ module tb_top();
 
     always #(CLK_PERIOD/2) clk = ~clk;
 
-    // ------------------------------------------------------------------
     // UART RX monitor
-    // ------------------------------------------------------------------
     reg [7:0] rx_byte;
     integer   rx_bit;
     initial begin rx_byte = 0; rx_bit = 0; end
@@ -50,49 +47,51 @@ module tb_top();
                  $time, (rx_byte >= 32 && rx_byte < 127) ? rx_byte : 8'h2E, rx_byte);
     end
 
-    // ------------------------------------------------------------------
     // GPIO monitor
-    // ------------------------------------------------------------------
     reg [31:0] prev_gpio = 32'hFFFF_FFFF;
     always @(gpio_out) begin
         $display("[%0t ns] GPIO: 0x%08h -> 0x%08h", $time, prev_gpio, gpio_out);
         prev_gpio = gpio_out;
     end
 
-    // ------------------------------------------------------------------
     // Trap monitor
-    // ------------------------------------------------------------------
     always @(posedge debug_trap)
         $display("\n!!! CPU TRAP at PC=0x%08h !!!\n", debug_pc);
 
-    // ------------------------------------------------------------------
-    // AXI bus monitors - print every AXI transaction
-    // ------------------------------------------------------------------
+    // AXI bus monitor
     always @(posedge clk) begin
-        // Write transactions
         if (soc.m_awvalid && soc.m_awready)
             $display("[%0t ns] AXI-AW: addr=0x%08h", $time, soc.m_awaddr);
         if (soc.m_wvalid && soc.m_wready)
             $display("[%0t ns] AXI-W : data=0x%08h strb=%04b", $time, soc.m_wdata, soc.m_wstrb);
         if (soc.m_bvalid && soc.m_bready)
             $display("[%0t ns] AXI-B : resp=%02b", $time, soc.m_bresp_nc);
-        // Read transactions
         if (soc.m_arvalid && soc.m_arready)
             $display("[%0t ns] AXI-AR: addr=0x%08h", $time, soc.m_araddr);
         if (soc.m_rvalid && soc.m_rready)
             $display("[%0t ns] AXI-R : data=0x%08h resp=%02b", $time, soc.m_rdata, soc.m_rresp);
     end
 
-    // ------------------------------------------------------------------
+    // Accelerator-specific monitor - filters transactions to 0x4000_xxxx
+    always @(posedge clk) begin
+        if (soc.m_awvalid && soc.m_awready && soc.m_awaddr[31:28] == 4'h4)
+            $display("[%0t ns] ACCEL-W: addr=0x%08h data=0x%08h",
+                     $time, soc.m_awaddr, soc.m_wdata);
+        if (soc.m_arvalid && soc.m_arready && soc.m_araddr[31:28] == 4'h4)
+            $display("[%0t ns] ACCEL-R: addr=0x%08h", $time, soc.m_araddr);
+        if (soc.m_rvalid && soc.m_rready && soc.m_araddr[31:28] == 4'h4)
+            $display("[%0t ns] ACCEL-RESULT: data=0x%08h", $time, soc.m_rdata);
+    end
+
     // Main sequence
-    // ------------------------------------------------------------------
-    integer gpio_ok = 0;
+    integer gpio_ok   = 0;
+    integer accel_ok  = 0;
 
     initial begin
         $display("==============================================");
         $display("  PicoRV32 AXI-Lite SoC Simulation");
         $display("  UART: 115200 baud  |  BRAM: 4KB");
-        $display("  Bus:  AXI-Lite crossbar");
+        $display("  Accel: dot_product @ 0x4000_0000");
         $display("==============================================\n");
 
         resetn = 0;
@@ -104,8 +103,7 @@ module tb_top();
         #500_000;
         gpio_ok = (gpio_out == 32'h0000_0001);
 
-        // Wait 29.5ms more - covers full UART output
-        // 150 chars x 87us = 13ms, 30ms total gives 2x margin
+        // Wait remainder - covers UART output and accelerator run
         #29_500_000;
 
         $display("\n==============================================");
@@ -113,16 +111,17 @@ module tb_top();
         $display("==============================================");
 
         if (gpio_ok)
-            $display("  PASS  GPIO : 0x00000001 seen within 500 us");
+            $display("  PASS  GPIO  : 0x00000001 seen within 500 us");
         else
-            $display("  FAIL  GPIO : gpio_out = 0x%08h at 500 us mark", gpio_out);
+            $display("  FAIL  GPIO  : gpio_out = 0x%08h at 500 us", gpio_out);
 
         if (!debug_trap)
-            $display("  PASS  CPU  : no trap");
+            $display("  PASS  CPU   : no trap");
         else
-            $display("  FAIL  CPU  : trap asserted");
+            $display("  FAIL  CPU   : trap asserted");
 
-        $display("  INFO  UART : see decoded bytes above");
+        $display("  INFO  ACCEL : see ACCEL-W/ACCEL-R/ACCEL-RESULT above");
+        $display("  INFO  UART  : see decoded bytes above");
         $display("==============================================\n");
 
         #500;
