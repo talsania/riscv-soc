@@ -56,8 +56,7 @@ module bram_axi_slave #(
         $display("[BRAM-AXI] Loaded firmware.hex");
     end
 
-    // Write path
-    // AW and W channels must both arrive before we write and send B response.
+    // Write path: AW and W channels must both arrive before we write and send B response.
     // Buffer whichever arrives first.
     reg        aw_captured;
     reg [31:0] aw_addr_buf;
@@ -136,4 +135,5 @@ module bram_axi_slave #(
             end
         end
     end
+
 endmodule

@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 
 //==============================================================================
-// uart_tx.v  —  UART TX Peripheral (Memory-Mapped)
+// uart_tx.v: UART TX Peripheral (Memory-Mapped)
 //
 // Fix: merged MMIO handler and TX state machine into ONE always block.
 //      Previously two separate blocks both wrote tx_state/tx_busy/tx_data,
@@ -9,8 +9,8 @@
 //      transmission, locking bit_idx at 1 forever in DATA state.
 //
 // Address map:
-//   0x20000000  W  TX data   — write byte to transmit
-//   0x20000004  R  TX status — bit 0 = tx_busy (1=transmitting)
+//   0x20000000  W  TX data: write byte to transmit
+//   0x20000004  R  TX status: bit 0 = tx_busy (1=transmitting)
 //
 // Frame: 8N1  |  Baud: clk / BAUD_DIV  (434 = 115200 @ 50MHz)
 //==============================================================================
@@ -31,9 +31,7 @@ module uart_tx #(
     output reg         uart_txd
 );
 
-    // -------------------------------------------------------------------------
     // Baud tick generator
-    // -------------------------------------------------------------------------
     reg [$clog2(BAUD_DIV)-1:0] baud_cnt;
     reg baud_tick;
 
@@ -51,9 +49,7 @@ module uart_tx #(
         end
     end
 
-    // -------------------------------------------------------------------------
-    // TX state machine + MMIO — ONE block, no register conflicts
-    // -------------------------------------------------------------------------
+    // TX state machine + MMIO - ONE block, no register conflicts
     localparam IDLE  = 2'd0;
     localparam START = 2'd1;
     localparam DATA  = 2'd2;
@@ -78,9 +74,7 @@ module uart_tx #(
             // Default: ready is a one-cycle pulse
             uart_ready <= 1'b0;
 
-            // -----------------------------------------------------------------
             // TX state machine
-            // -----------------------------------------------------------------
             case (tx_state)
                 IDLE: begin
                     uart_txd <= 1'b1;
@@ -117,14 +111,12 @@ module uart_tx #(
                 end
             endcase
 
-            // -----------------------------------------------------------------
-            // MMIO handshake — only acts when TX is IDLE (tx_busy=0)
+            // MMIO handshake - only acts when TX is IDLE (tx_busy=0)
             // CPU polling tx_busy ensures it never writes while busy,
             // but we guard here too for safety.
-            // -----------------------------------------------------------------
             if (uart_valid && !uart_ready) begin
                 if (uart_we) begin
-                    // Write: 0x20000000 — load byte and start TX
+                    // Write: 0x20000000 - load byte and start TX
                     if (!tx_busy) begin
                         tx_data  <= uart_wdata;
                         tx_busy  <= 1'b1;
@@ -133,10 +125,10 @@ module uart_tx #(
                                  $time, uart_wdata,
                                  (uart_wdata >= 32 && uart_wdata < 127) ? uart_wdata : 8'h2E);
                     end else begin
-                        $display("[%0t] UART MMIO: BUSY — byte 0x%02h dropped!", $time, uart_wdata);
+                        $display("[%0t] UART MMIO: BUSY - byte 0x%02h dropped!", $time, uart_wdata);
                     end
                 end else begin
-                    // Read: 0x20000004 — return tx_busy status
+                    // Read: 0x20000004 - return tx_busy status
                     uart_rdata <= {31'h0, tx_busy};
                 end
                 uart_ready <= 1'b1;

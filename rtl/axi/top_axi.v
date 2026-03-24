@@ -1,6 +1,8 @@
 `timescale 1ns / 1ps
 
 //==============================================================================
+// top_axi.v  -  PicoRV32 SoC with AXI-Lite bus
+//
 // Hierarchy:
 //   top_axi
 //   |-- picorv32                 CPU (native valid/ready)

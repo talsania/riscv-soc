@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 
 //==============================================================================
-// tb_top.v (top_axi testbench)
+// tb_top.v  -  Testbench for top_axi (AXI-Lite bus SoC)
 //
 // Tests: GPIO write, UART TX, dot product accelerator, no CPU trap
 // UART:  115200 baud, 8N1 - BIT_NS = 434 * 20ns = 8680ns

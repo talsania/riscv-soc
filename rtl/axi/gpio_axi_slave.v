@@ -103,4 +103,5 @@ module gpio_axi_slave (
                 s_axi_rvalid <= 0;
         end
     end
+
 endmodule

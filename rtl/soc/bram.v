@@ -1,14 +1,14 @@
 `timescale 1ns / 1ps
 
 // =============================================================================
-// bram.v  —  4 KB single-port BRAM for PicoRV32 SoC
+// bram.v  -  4 KB single-port BRAM for PicoRV32 SoC
 //
 // Changes from previous version:
 //   - Removed hardcoded assembly program
 //   - Loads firmware/firmware.hex at simulation start via $readmemh
 //   - hex format: one 32-bit word per line (produced by Makefile)
 //
-// Interface is IDENTICAL to the previous bram.v — top.v needs no changes.
+// Interface is IDENTICAL to the previous bram.v - top.v needs no changes.
 //
 // Memory map:
 //   Base : 0x00000000
@@ -17,7 +17,7 @@
 //
 // Timing:
 //   Read/write completes in 1 clock cycle (bram_ready asserts one cycle
-//   after bram_valid, then deasserts the next cycle — same as before).
+//   after bram_valid, then deasserts the next cycle - same as before).
 // =============================================================================
 
 module bram (
@@ -33,17 +33,13 @@ module bram (
     output reg         bram_ready
 );
 
-    // -------------------------------------------------------------------------
-    // Memory array — 1024 words × 32 bits = 4 KB
-    // -------------------------------------------------------------------------
+    // Memory array - 1024 words × 32 bits = 4 KB
     reg [31:0] memory [0:1023];
 
-    // Byte address → word index (drop bottom 2 bits)
+    // Byte address - word index (drop bottom 2 bits)
     wire [9:0] word_addr = bram_addr[11:2];
 
-    // -------------------------------------------------------------------------
     // Read / Write
-    // -------------------------------------------------------------------------
     always @(posedge clk) begin
         if (!resetn) begin
             bram_ready <= 1'b0;
@@ -54,17 +50,13 @@ module bram (
             if (bram_valid && !bram_ready) begin
 
                 if (bram_wstrb != 4'b0000) begin
-                    // ---------------------------------------------------------
-                    // WRITE — byte-enable masked
-                    // ---------------------------------------------------------
+                    // WRITE - byte-enable masked
                     if (bram_wstrb[0]) memory[word_addr][ 7: 0] <= bram_wdata[ 7: 0];
                     if (bram_wstrb[1]) memory[word_addr][15: 8] <= bram_wdata[15: 8];
                     if (bram_wstrb[2]) memory[word_addr][23:16] <= bram_wdata[23:16];
                     if (bram_wstrb[3]) memory[word_addr][31:24] <= bram_wdata[31:24];
                 end else begin
-                    // ---------------------------------------------------------
                     // READ
-                    // ---------------------------------------------------------
                     bram_rdata <= memory[word_addr];
                 end
 
@@ -73,8 +65,7 @@ module bram (
         end
     end
 
-    // -------------------------------------------------------------------------
-    // Initialisation — load hex file produced by firmware/Makefile
+    // Initialisation - load hex file produced by firmware/Makefile
     //
     // $readmemh expects one hex word per line with NO "0x" prefix:
     //   00000013
@@ -88,13 +79,11 @@ module bram (
     //
     // For synthesis (loading into block RAM):
     //   Use Vivado's "Memory Initialization File" (.mif) flow or set the
-    //   BRAM primitive's INIT attribute — or keep $readmemh and use
+    //   BRAM primitive's INIT attribute - or keep $readmemh and use
     //   "Simulation only" mode while programming via JTAG for hardware.
-    // -------------------------------------------------------------------------
 
     // Path relative to Vivado project root (where .xpr lives).
     localparam HEX_FILE = "C:/Users/Krishang/Desktop/riscv-soc/firmware/firmware.hex";
-
     integer i;
     initial begin
         // Zero-fill first so any unused words are NOP (0x00000013)

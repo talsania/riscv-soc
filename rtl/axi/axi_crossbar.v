@@ -231,4 +231,5 @@ module axi_crossbar #(
     assign m1_axi_rready = s_axi_rready && (rd_slave_latch==2'd1);
     assign m2_axi_rready = s_axi_rready && (rd_slave_latch==2'd2);
     assign m3_axi_rready = s_axi_rready && (rd_slave_latch==2'd3);
+
 endmodule
